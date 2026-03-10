@@ -1,0 +1,97 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches: [main]
+
+env:
+  ACR_NAME: acrdevmyappdev
+  CONTAINER_GROUP_NAME: app-myapp-dev
+  IMAGE_NAME: myapp
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Authenticate to Azure using the service principal credentials
+      - name: Login to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # Set up Terraform
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.7.0
+
+      # Initialize Terraform with remote state backend
+      - name: Terraform Init
+        working-directory: terraform
+        run: terraform init
+
+      # Deploy or update infrastructure
+      - name: Terraform Apply
+        working-directory: terraform
+        run: terraform apply -auto-approve
+        env:
+          ARM_CLIENT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).clientId }}
+          ARM_CLIENT_SECRET: ${{ fromJson(secrets.AZURE_CREDENTIALS).clientSecret }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).tenantId }}
+
+      # Fetch ACR password fresh from Azure so it never goes stale
+      - name: Get ACR credentials
+        run: |
+          ACR_PASSWORD=$(az acr credential show \
+            --name ${{ env.ACR_NAME }} \
+            --query passwords[0].value \
+            --output tsv)
+          echo "ACR_PASSWORD=$ACR_PASSWORD" >> $GITHUB_ENV
+
+      # Authenticate Docker to ACR
+      - name: Login to ACR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ACR_LOGIN_SERVER }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ env.ACR_PASSWORD }}
+
+      # Build and push image — tag with both latest and commit SHA
+      # The commit SHA tag means every deployment is traceable to a specific commit
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./app
+          push: true
+          tags: |
+            ${{ secrets.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:latest
+            ${{ secrets.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+      # Restart the container group to pick up the new image
+      - name: Redeploy container group
+        run: |
+          az container restart \
+            --name ${{ env.CONTAINER_GROUP_NAME }} \
+            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }}
+
+      # Wait for the container to come back up
+      - name: Wait for container to start
+        run: sleep 30
+
+      # Fetch the app URL from Terraform output and test it
+      - name: Test deployment
+        working-directory: terraform
+        run: |
+          APP_URL=$(terraform output -raw app_url)
+          echo "Testing $APP_URL"
+          curl --fail http://${APP_URL}:8080
+        env:
+          ARM_CLIENT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).clientId }}
+          ARM_CLIENT_SECRET: ${{ fromJson(secrets.AZURE_CREDENTIALS).clientSecret }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).tenantId }}
