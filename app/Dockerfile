@@ -15,5 +15,5 @@ COPY . .
 # Document which port the app listens on
 EXPOSE 8080
 
-# Command to run when the container starts
+# Runs on container start
 CMD ["gunicorn", "--bind", "0.0.0.0:8080", "app:app"]

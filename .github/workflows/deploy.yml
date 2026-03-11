@@ -29,6 +29,14 @@ jobs:
         with:
           terraform_version: 1.10.4
 
+      # Cache Terraform provider (speeds up deployment)
+      - name: Cache Terraform providers
+        uses: actions/cache@v3
+        with:
+          path: terraform/.terraform
+          key: terraform-${{ hashFiles('terraform/.terraform.lock.hcl') }}
+          restore-keys: terraform-
+
       # Initialize Terraform with remote state backend
       - name: Terraform Init
         working-directory: terraform
@@ -49,7 +57,7 @@ jobs:
           ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           ARM_TENANT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).tenantId }}
 
-      # Fetch ACR password fresh from Azure so it never goes stale
+      # Fetch ACR password fresh from Azure
       - name: Get ACR credentials
         run: |
           ACR_PASSWORD=$(az acr credential show \
