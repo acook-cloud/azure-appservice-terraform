@@ -3,6 +3,7 @@ name: Build and Deploy
 on:
   push:
     branches: [main]
+  workflow_dispatch:    # adds a manual trigger button
 
 env:
   ACR_NAME: acrdevmyappdev
